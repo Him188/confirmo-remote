@@ -5,6 +5,8 @@
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
+const http = require('http')
+const https = require('https')
 
 const { spawnSync } = require('child_process')
 
@@ -235,28 +237,71 @@ function resolveRemoteSettings() {
 }
 
 async function postRemoteStatus(target, jsonArg, timeoutMs) {
-  if (typeof fetch !== 'function') return
+  const headers = { 'content-type': 'application/json' }
+  if (target.token) {
+    headers.authorization = `Bearer ${target.token}`
+  }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // Prefer fetch when available (Node 18+), fallback to http(s).request for older Node.
+  if (typeof fetch === 'function') {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-  try {
-    const headers = { 'content-type': 'application/json' }
-    if (target.token) {
-      headers.authorization = `Bearer ${target.token}`
+    try {
+      await fetch(target.url, {
+        method: 'POST',
+        headers,
+        body: jsonArg,
+        signal: controller.signal
+      })
+    } catch (_) {
+      // Ignore remote errors
+    } finally {
+      clearTimeout(timer)
+    }
+    return
+  }
+
+  await postRemoteStatusLegacy(target.url, headers, jsonArg, timeoutMs)
+}
+
+function postRemoteStatusLegacy(url, headers, body, timeoutMs) {
+  return new Promise((resolve) => {
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch (_) {
+      resolve()
+      return
     }
 
-    await fetch(target.url, {
-      method: 'POST',
-      headers,
-      body: jsonArg,
-      signal: controller.signal
-    })
-  } catch (_) {
-    // Ignore remote errors
-  } finally {
-    clearTimeout(timer)
-  }
+    const client = parsed.protocol === 'https:'
+      ? https
+      : (parsed.protocol === 'http:' ? http : null)
+
+    if (!client) {
+      resolve()
+      return
+    }
+
+    const req = client.request(
+      parsed,
+      {
+        method: 'POST',
+        headers,
+        timeout: timeoutMs
+      },
+      (res) => {
+        res.on('data', () => {}) // Drain response to avoid socket hangups.
+        res.on('end', resolve)
+      }
+    )
+
+    req.on('timeout', () => req.destroy(new Error('timeout')))
+    req.on('error', () => resolve())
+    req.write(body)
+    req.end()
+  })
 }
 
 async function fanoutRemoteStatus(jsonArg) {
