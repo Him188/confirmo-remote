@@ -1,11 +1,13 @@
 # confirmo-remote
 
 接收 Codex hook 事件并写入本机 `~/.confirmo/codex-status`，用于让另一台机器上的 Confirmo 显示状态。
+本文档里的项目脚本路径都相对于仓库根目录（`./bin/...`、`./src/...`）。
 
 ## 1. 启动接收端（在运行 Confirmo 的机器上）
 
 ```bash
-cd ~/IdeaProjects/confirmo-remote
+git clone <your-repo-url> confirmo-remote
+cd confirmo-remote
 npm install
 npx confirmo-remote serve --token "replace-with-a-strong-token"
 ```
@@ -49,6 +51,29 @@ ngrok http 17890
 - 字符串目标默认使用顶层 `token`。
 - 对象目标可单独指定 `token`。
 - 现有本地写入不受影响，始终保留，所以这是「本地 + 多远程」fan-out。
+
+也可以用自动脚本（推荐，GitHub Pages）：
+
+```bash
+bash <(curl -fsSL https://him188.github.io/confirmo-remote/bin/configure-codex-remote.sh) \
+  https://h1-confirmo.ngrok.app \
+  --token "replace-with-a-strong-token" \
+  --replace-targets
+```
+
+如果不想用 `bash <(...)`，也可以先下载再执行：
+
+```bash
+curl -fsSL -o ./configure-codex-remote.sh \
+  https://him188.github.io/confirmo-remote/bin/configure-codex-remote.sh
+chmod +x ./configure-codex-remote.sh
+./configure-codex-remote.sh https://h1-confirmo.ngrok.app --token "replace-with-a-strong-token"
+```
+
+脚本会自动把裸域名补全为 `/v1/codex/event`，并且会：
+- 自动安装 `~/.confirmo/hooks/confirmo-codex-hook.js`（缺失时）
+- 自动修复 `~/.codex/config.toml` 里的 `notify` 指向 Confirmo hook
+- 写入 `~/.confirmo/hooks/codex-remote.json`
 
 ## 4. 环境变量覆盖（可选）
 
