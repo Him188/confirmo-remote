@@ -1,0 +1,16 @@
+{
+  "name": "confirmo-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote receiver for Confirmo Codex status updates",
+  "bin": {
+    "confirmo-remote": "./bin/confirmo-remote.js"
+  },
+  "scripts": {
+    "start": "node ./bin/confirmo-remote.js serve",
+    "serve": "node ./bin/confirmo-remote.js serve"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
