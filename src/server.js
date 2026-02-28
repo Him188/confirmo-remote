@@ -4,11 +4,13 @@ const os = require('os')
 const path = require('path')
 
 const { applyCodexEvent } = require('./codex-event')
+const { CodexStreamStore, DEFAULT_CODEX_SESSIONS_ROOT, isCodexStreamEntry, normalizeStreamEntries } = require('./codex-stream-store')
 const { StatusStore } = require('./status-store')
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 17890
 const DEFAULT_PATH = '/v1/codex/event'
+const DEFAULT_STREAM_PATH = '/v1/codex/stream'
 const DEFAULT_STATUS_DIR = path.join(os.homedir(), '.confirmo', 'codex-status')
 const DEFAULT_BODY_LIMIT = 256 * 1024
 
@@ -18,8 +20,10 @@ function parseArgs(argv) {
     host: DEFAULT_HOST,
     port: DEFAULT_PORT,
     path: DEFAULT_PATH,
+    streamPath: DEFAULT_STREAM_PATH,
     token: process.env.CONFIRMO_REMOTE_TOKEN || '',
     statusDir: process.env.CONFIRMO_REMOTE_STATUS_DIR || DEFAULT_STATUS_DIR,
+    codexSessionsRoot: process.env.CONFIRMO_CODEX_SESSIONS_ROOT || DEFAULT_CODEX_SESSIONS_ROOT,
     retentionHours: Number(process.env.CONFIRMO_REMOTE_RETENTION_HOURS || 24),
     bodyLimitBytes: Number(process.env.CONFIRMO_REMOTE_MAX_BODY_BYTES || DEFAULT_BODY_LIMIT)
   }
@@ -53,12 +57,20 @@ function parseArgs(argv) {
         args.path = normalizePath(value || args.path)
         i += 2
         break
+      case '--stream-path':
+        args.streamPath = normalizePath(value || args.streamPath)
+        i += 2
+        break
       case '--token':
         args.token = value || ''
         i += 2
         break
       case '--status-dir':
         args.statusDir = value || args.statusDir
+        i += 2
+        break
+      case '--codex-sessions-root':
+        args.codexSessionsRoot = value || args.codexSessionsRoot
         i += 2
         break
       case '--retention-hours':
@@ -162,14 +174,17 @@ function usage() {
     'Options:',
     '  --listen <host:port>      Listen address. Default: 127.0.0.1:17890',
     '  --path <path>             Endpoint path. Default: /v1/codex/event',
+    '  --stream-path <path>      Stream endpoint path. Default: /v1/codex/stream',
     '  --token <token>           Bearer token for authentication (required)',
     '  --status-dir <dir>        Status directory. Default: ~/.confirmo/codex-status',
+    '  --codex-sessions-root <d> Codex sessions root. Default: ~/.codex/sessions',
     '  --retention-hours <n>     Ended session retention hours. Default: 24',
     '  --max-body-bytes <n>      Max request body size. Default: 262144',
     '',
     'Environment variables:',
     '  CONFIRMO_REMOTE_TOKEN',
     '  CONFIRMO_REMOTE_STATUS_DIR',
+    '  CONFIRMO_CODEX_SESSIONS_ROOT',
     '  CONFIRMO_REMOTE_RETENTION_HOURS',
     '  CONFIRMO_REMOTE_MAX_BODY_BYTES'
   ].join('\n')
@@ -199,6 +214,9 @@ function createServer(options) {
     statusRoot: options.statusDir,
     retentionMs: Math.round(options.retentionHours * 60 * 60 * 1000)
   })
+  const codexStreamStore = new CodexStreamStore({
+    sessionsRoot: options.codexSessionsRoot
+  })
 
   return http.createServer(async (req, res) => {
     try {
@@ -208,7 +226,9 @@ function createServer(options) {
         return
       }
 
-      if (req.method !== 'POST' || requestUrl.pathname !== options.path) {
+      const isEventPath = requestUrl.pathname === options.path
+      const isStreamPath = requestUrl.pathname === options.streamPath
+      if (!isEventPath && !isStreamPath) {
         writeJson(res, 404, { ok: false, error: 'not_found' })
         return
       }
@@ -219,15 +239,38 @@ function createServer(options) {
         return
       }
 
-      const payload = await readJsonBody(req, options.bodyLimitBytes)
-      const result = applyCodexEvent(payload, store)
+      if (req.method !== 'POST') {
+        writeJson(res, 405, { ok: false, error: 'method_not_allowed' })
+        return
+      }
 
-      writeJson(res, 202, {
-        ok: true,
-        applied: result.applied,
-        reason: result.reason,
-        sessionId: result.sessionId || null
-      })
+      const payload = await readJsonBody(req, options.bodyLimitBytes)
+
+      if (isEventPath) {
+        const result = applyCodexEvent(payload, store)
+        writeJson(res, 202, {
+          ok: true,
+          applied: result.applied,
+          reason: result.reason,
+          sessionId: result.sessionId || null
+        })
+        return
+      }
+
+      if (isStreamPath) {
+        const entries = normalizeStreamEntries(payload).filter(isCodexStreamEntry)
+        const source = payload && typeof payload === 'object' ? payload.source : undefined
+        const result = codexStreamStore.appendEntries(entries, source)
+        writeJson(res, 202, {
+          ok: true,
+          applied: result.written > 0,
+          accepted: entries.length,
+          file: result.file
+        })
+        return
+      }
+
+      writeJson(res, 404, { ok: false, error: 'not_found' })
     } catch (err) {
       const status = typeof err.code === 'number' ? err.code : 500
       const code = status === 500 ? 'internal_error' : err.message
@@ -252,8 +295,11 @@ async function main() {
   })
 
   process.stdout.write(
-    `confirmo-remote listening on http://${args.host}:${args.port}${args.path}\n` +
+    `confirmo-remote listening on http://${args.host}:${args.port}\n` +
+      `event path: ${args.path}\n` +
+      `stream path: ${args.streamPath}\n` +
       `status dir: ${args.statusDir}\n` +
+      `codex sessions: ${args.codexSessionsRoot}\n` +
       'healthz: /healthz\n'
   )
 }

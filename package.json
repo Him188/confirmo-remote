@@ -4,11 +4,13 @@
   "private": true,
   "description": "Remote receiver for Confirmo Codex status updates",
   "bin": {
-    "confirmo-remote": "./bin/confirmo-remote.js"
+    "confirmo-remote": "./bin/confirmo-remote.js",
+    "confirmo-codex-activity-bridge": "./bin/codex-activity-bridge.js"
   },
   "scripts": {
     "start": "node ./bin/confirmo-remote.js serve",
-    "serve": "node ./bin/confirmo-remote.js serve"
+    "serve": "node ./bin/confirmo-remote.js serve",
+    "bridge": "node ./bin/codex-activity-bridge.js run"
   },
   "engines": {
     "node": ">=18"

@@ -1,9 +1,12 @@
 # confirmo-remote
 
-接收 Codex hook 事件并写入本机 `~/.confirmo/codex-status`，用于让另一台机器上的 Confirmo 显示状态。
+让 Confirmo 支持远程 Codex 状态同步：
+- `POST /v1/codex/event`：同步 turn-complete（原本 hook 事件）
+- `POST /v1/codex/stream`：同步 Codex JSONL 流（用于 active/working 动画）
+
 本文档里的项目脚本路径都相对于仓库根目录（`./bin/...`、`./src/...`）。
 
-## 1. 启动接收端（在运行 Confirmo 的机器上）
+## 1. 启动接收端（Confirmo 机器）
 
 ```bash
 git clone <your-repo-url> confirmo-remote
@@ -13,7 +16,9 @@ npx confirmo-remote serve --token "replace-with-a-strong-token"
 ```
 
 默认监听：`127.0.0.1:17890`  
-默认接口：`POST /v1/codex/event`  
+默认接口：
+- `POST /v1/codex/event`
+- `POST /v1/codex/stream`  
 健康检查：`GET /healthz`
 
 ## 2. 用 ngrok 暴露到公网（可选）
@@ -22,37 +27,32 @@ npx confirmo-remote serve --token "replace-with-a-strong-token"
 ngrok http 17890
 ```
 
-假设 ngrok 给你的地址是：
-`https://abc123.ngrok-free.app`
+假设公网地址是 `https://h1-confirmo.ngrok.app`，那么上报地址会自动补全为：
+- 事件：`https://h1-confirmo.ngrok.app/v1/codex/event`
+- 流：`https://h1-confirmo.ngrok.app/v1/codex/stream`
 
-则上报地址是：
-`https://abc123.ngrok-free.app/v1/codex/event`
+## 3. 在 Codex 机器上一条命令配置（推荐）
 
-## 3. 在运行 Codex 的机器上配置 hook 远程目标
-
-编辑 `~/.confirmo/hooks/codex-remote.json`：
-
-```json
-{
-  "token": "replace-with-a-strong-token",
-  "timeoutMs": 1800,
-  "targets": [
-    "https://abc123.ngrok-free.app/v1/codex/event",
-    {
-      "url": "https://another-target.ngrok-free.app/v1/codex/event",
-      "token": "another-token"
-    }
-  ]
-}
+```bash
+bash <(curl -fsSL https://him188.github.io/confirmo-remote/bin/configure-codex-remote-all.sh) \
+  https://h1-confirmo.ngrok.app \
+  --token "replace-with-a-strong-token" \
+  --replace-targets
 ```
 
-说明：
-- `targets` 支持字符串和对象。
-- 字符串目标默认使用顶层 `token`。
-- 对象目标可单独指定 `token`。
-- 现有本地写入不受影响，始终保留，所以这是「本地 + 多远程」fan-out。
+这个一体化脚本会同时完成：
+- 安装/修复 `~/.confirmo/hooks/confirmo-codex-hook.js`
+- 修复 `~/.codex/config.toml` 的 `notify` 指向 hook
+- 写入 `~/.confirmo/hooks/codex-remote.json`（支持多目标 fan-out，且保留本地写入）
+- 安装并启动开机自启的 active bridge（launchd）
 
-也可以用自动脚本（推荐，GitHub Pages）：
+说明：
+- `--replace-targets` 会替换所有远程目标；不加时默认 append（并去重）
+- GitHub Pages 更新有缓存，push 后通常要等约 5 分钟再执行这条命令
+
+## 4. 分步配置（可选）
+
+仅配置事件上报：
 
 ```bash
 bash <(curl -fsSL https://him188.github.io/confirmo-remote/bin/configure-codex-remote.sh) \
@@ -61,36 +61,56 @@ bash <(curl -fsSL https://him188.github.io/confirmo-remote/bin/configure-codex-r
   --replace-targets
 ```
 
-如果不想用 `bash <(...)`，也可以先下载再执行：
+仅配置 active bridge：
 
 ```bash
-curl -fsSL -o ./configure-codex-remote.sh \
-  https://him188.github.io/confirmo-remote/bin/configure-codex-remote.sh
-chmod +x ./configure-codex-remote.sh
-./configure-codex-remote.sh https://h1-confirmo.ngrok.app --token "replace-with-a-strong-token"
+bash <(curl -fsSL https://him188.github.io/confirmo-remote/bin/configure-codex-active-bridge.sh) \
+  --target https://h1-confirmo.ngrok.app \
+  --token "replace-with-a-strong-token"
 ```
 
-脚本会自动把裸域名补全为 `/v1/codex/event`，并且会：
-- 自动安装 `~/.confirmo/hooks/confirmo-codex-hook.js`（缺失时）
-- 自动修复 `~/.codex/config.toml` 里的 `notify` 指向 Confirmo hook
-- 写入 `~/.confirmo/hooks/codex-remote.json`
+## 5. 多目标配置示例（本地 + 多远程）
 
-## 4. 环境变量覆盖（可选）
+本地写入始终存在。远程可配置多个目标：
 
-这些环境变量会覆盖/补充文件配置：
+```json
+{
+  "token": "replace-with-a-strong-token",
+  "timeoutMs": 1800,
+  "targets": [
+    "https://h1-confirmo.ngrok.app/v1/codex/event",
+    {
+      "url": "https://another-target.ngrok.app/v1/codex/event",
+      "token": "another-token"
+    }
+  ]
+}
+```
+
+## 6. 环境变量覆盖（可选）
+
+Hook 远程 fan-out：
 - `CONFIRMO_REMOTE_TOKEN`
-- `CONFIRMO_REMOTE_URL`（单目标）
-- `CONFIRMO_REMOTE_TARGETS`（逗号或换行分隔多目标）
+- `CONFIRMO_REMOTE_URL`
+- `CONFIRMO_REMOTE_TARGETS`
 - `CONFIRMO_REMOTE_TIMEOUT_MS`
 
-## 5. 接收端参数
+Active bridge：
+- `CONFIRMO_REMOTE_STREAM_URL`
+- `CONFIRMO_REMOTE_TOKEN`
+- `CONFIRMO_CODEX_SESSIONS_ROOT`
+- `CONFIRMO_SOURCE`
+
+## 7. 接收端参数
 
 ```bash
 npx confirmo-remote serve \
   --listen 127.0.0.1:17890 \
   --path /v1/codex/event \
+  --stream-path /v1/codex/stream \
   --token "replace-with-a-strong-token" \
   --status-dir ~/.confirmo/codex-status \
+  --codex-sessions-root ~/.codex/sessions \
   --retention-hours 24 \
   --max-body-bytes 262144
 ```
